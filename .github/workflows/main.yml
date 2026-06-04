@@ -1,0 +1,63 @@
+name: Build Frigate RK offline image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Image to package"
+        required: true
+        default: "ghcr.io/blakeblackshear/frigate:stable-rk"
+      tag:
+        description: "GitHub Release tag"
+        required: true
+        default: "frigate-stable-rk"
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Set variables
+        run: |
+          IMAGE="${{ github.event.inputs.image }}"
+          RELEASE_TAG="${{ github.event.inputs.tag }}"
+          SAFE_NAME="$(echo "$IMAGE" | sed 's#[/:]#-#g')"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+          echo "SAFE_NAME=$SAFE_NAME" >> "$GITHUB_ENV"
+
+      - name: Pull Frigate RK arm64 image
+        run: |
+          docker pull --platform=linux/arm64 "$IMAGE"
+
+      - name: Save and compress image
+        run: |
+          docker save --platform=linux/arm64 "$IMAGE" | gzip -9 > "${SAFE_NAME}.tar.gz"
+
+      - name: Split if larger than 1900MB
+        run: |
+          mkdir -p dist
+          size=$(stat -c%s "${SAFE_NAME}.tar.gz")
+          limit=$((1900 * 1024 * 1024))
+
+          if [ "$size" -gt "$limit" ]; then
+            split -b 1900M -d -a 3 "${SAFE_NAME}.tar.gz" "dist/${SAFE_NAME}.tar.gz.part-"
+            rm "${SAFE_NAME}.tar.gz"
+          else
+            mv "${SAFE_NAME}.tar.gz" dist/
+          fi
+
+          docker image inspect "$IMAGE" --format '{{index .RepoDigests 0}}' > dist/digest.txt
+          sha256sum dist/* > dist/SHA256SUMS.txt
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --notes "Frigate RK offline Docker image"
+
+          gh release upload "$RELEASE_TAG" dist/* --clobber
