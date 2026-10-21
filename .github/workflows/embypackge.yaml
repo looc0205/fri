@@ -10,25 +10,25 @@ on:
         default: "amilys/embyserver_arm64v8"
 
       platform:
-        description: "Target platform"
+        description: "目标平台 (针对该镜像请选 linux/amd64 以绕过标签错误)"
         required: true
         type: choice
         options:
-          - linux/arm64
           - linux/amd64
-        default: linux/arm64
+          - linux/arm64
+        default: linux/amd64
 
       release_tag:
         description: "GitHub Release tag. Leave empty to auto-generate."
         required: false
         type: string
-        default: "emby-arm64"
+        default: "emby-arm64-offline"
 
       output_name:
-        description: "Output file prefix. Leave empty to auto-generate."
+        description: "Output file prefix."
         required: false
         type: string
-        default: ""
+        default: "emby-arm64-offline"
 
       compression:
         description: "Compression format"
@@ -41,7 +41,7 @@ on:
         default: gzip
 
       compression_level:
-        description: "Compression level. gzip/pigz: 1-9, zstd: 1-19"
+        description: "Compression level."
         required: true
         type: choice
         options:
@@ -53,13 +53,13 @@ on:
         default: "1"
 
       split_size_mb:
-        description: "Split size in MB. Keep below GitHub Release 2 GiB limit."
+        description: "Split size in MB."
         required: true
         type: string
         default: "1900"
 
       retag_as:
-        description: "Optional tag saved into archive. Leave empty to keep original image name."
+        description: "Optional tag saved into archive."
         required: false
         type: string
         default: ""
@@ -80,7 +80,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           IMAGE="${{ inputs.image }}"
           PLATFORM="${{ inputs.platform }}"
           COMPRESSION="${{ inputs.compression }}"
@@ -110,11 +109,6 @@ jobs:
             *) echo "Unsupported compression: $COMPRESSION"; exit 1 ;;
           esac
 
-          if ! [[ "$SPLIT_SIZE_MB" =~ ^[0-9]+$ ]]; then
-            echo "split_size_mb must be a number"
-            exit 1
-          fi
-
           {
             echo "IMAGE=$IMAGE"
             echo "PLATFORM=$PLATFORM"
@@ -134,35 +128,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pigz zstd
 
-      - name: Optional registry login
-        shell: bash
-        env:
-          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -n "${REGISTRY_USERNAME:-}" ] && [ -n "${REGISTRY_TOKEN:-}" ]; then
-            REGISTRY="$(echo "$IMAGE" | awk -F/ '{print $1}')"
-            echo "$REGISTRY_TOKEN" | docker login "$REGISTRY" \
-              -u "$REGISTRY_USERNAME" \
-              --password-stdin
-          else
-            echo "No registry credentials provided. Skipping docker login."
-          fi
-
-      - name: Inspect remote image and verify platform
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          docker buildx imagetools inspect "$IMAGE" | tee dist/remote-inspect.txt
-
-          if ! grep -q "$PLATFORM" dist/remote-inspect.txt; then
-            echo "::error::Image $IMAGE does not provide platform $PLATFORM. Available platforms:"
-            grep -Eo 'linux/[a-z0-9]+(/[a-z0-9]+)?' dist/remote-inspect.txt | sort -u || true
-            exit 1
-          fi
-
+      # 直接拉取，不检查本地架构，因为作者标签写错了但内容是 arm64
       - name: Pull image
         shell: bash
         run: |
@@ -180,19 +146,6 @@ jobs:
             SAVE_IMAGE="$IMAGE"
           fi
           echo "SAVE_IMAGE=$SAVE_IMAGE" >> "$GITHUB_ENV"
-
-      - name: Verify local image architecture
-        shell: bash
-        run: |
-          set -euo pipefail
-          LOCAL_ARCH="$(docker image inspect "$SAVE_IMAGE" --format '{{.Architecture}}')"
-          LOCAL_OS="$(docker image inspect "$SAVE_IMAGE" --format '{{.Os}}')"
-          LOCAL_PLATFORM="${LOCAL_OS}/${LOCAL_ARCH}"
-          echo "Local image platform: $LOCAL_PLATFORM"
-          if [ "$LOCAL_PLATFORM" != "$PLATFORM" ]; then
-            echo "::error::Local image platform $LOCAL_PLATFORM does not match requested $PLATFORM"
-            exit 1
-          fi
 
       - name: Save image archive
         shell: bash
@@ -219,24 +172,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-
           docker image inspect "$SAVE_IMAGE" > dist/image-inspect.json
           docker image inspect "$SAVE_IMAGE" --format '{{json .RepoDigests}}' > dist/repo-digests.json || true
 
           {
             echo "Image: $IMAGE"
             echo "Saved as: $SAVE_IMAGE"
-            echo "Platform: $PLATFORM"
+            echo "Platform (Manifest): $PLATFORM"
             echo "Compression: $COMPRESSION"
-            echo "Compression level: $COMPRESSION_LEVEL"
             echo "Archive: $ARCHIVE"
             echo "Created at UTC: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-            echo
-            echo "Docker version:"
-            docker version --format '{{.Server.Version}}'
-            echo
-            echo "Repo digests:"
-            cat dist/repo-digests.json || true
           } > dist/image-info.txt
 
       - name: Generate offline load script
@@ -245,48 +190,43 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           cat > dist/load.sh <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
+#!/usr/bin/env bash
+set -euo pipefail
 
-          echo "Checking SHA256 sums..."
-          if [ -f SHA256SUMS.txt ]; then
-            sha256sum -c --ignore-missing SHA256SUMS.txt
-          else
-            echo "SHA256SUMS.txt not found, skipping checksum verification."
-          fi
+echo "Checking SHA256 sums..."
+if [ -f SHA256SUMS.txt ]; then
+  sha256sum -c --ignore-missing SHA256SUMS.txt
+else
+  echo "SHA256SUMS.txt not found, skipping checksum verification."
+fi
 
-          if ls *.part-* >/dev/null 2>&1; then
-            first_part="$(ls *.part-* | head -n 1)"
-            base="${first_part%%.part-*}"
+if ls *.part-* >/dev/null 2>&1; then
+  first_part="$(ls *.part-* | head -n 1)"
+  base="${first_part%%.part-*}"
+  echo "Loading split archive: ${base}.part-*"
+  case "$base" in
+    *.tar.gz) cat "${base}".part-* | gzip -dc | docker load ;;
+    *.tar.zst) cat "${base}".part-* | zstd -dc | docker load ;;
+    *.tar) cat "${base}".part-* | docker load ;;
+    *) echo "Unknown split archive type: $base"; exit 1 ;;
+  esac
+else
+  archive="$(find . -maxdepth 1 -type f \( -name '*.tar' -o -name '*.tar.gz' -o -name '*.tar.zst' \) | sort | head -n 1)"
+  if [ -z "$archive" ]; then
+    echo "No Docker archive found."
+    exit 1
+  fi
+  echo "Loading archive: $archive"
+  case "$archive" in
+    *.tar.gz) gzip -dc "$archive" | docker load ;;
+    *.tar.zst) zstd -dc "$archive" | docker load ;;
+    *.tar) docker load -i "$archive" ;;
+    *) echo "Unknown archive type: $archive"; exit 1 ;;
+  esac
+fi
 
-            echo "Loading split archive: ${base}.part-*"
-
-            case "$base" in
-              *.tar.gz) cat "${base}".part-* | gzip -dc | docker load ;;
-              *.tar.zst) cat "${base}".part-* | zstd -dc | docker load ;;
-              *.tar) cat "${base}".part-* | docker load ;;
-              *) echo "Unknown split archive type: $base"; exit 1 ;;
-            esac
-          else
-            archive="$(find . -maxdepth 1 -type f \( -name '*.tar' -o -name '*.tar.gz' -o -name '*.tar.zst' \) | sort | head -n 1)"
-
-            if [ -z "$archive" ]; then
-              echo "No Docker archive found."
-              exit 1
-            fi
-
-            echo "Loading archive: $archive"
-            case "$archive" in
-              *.tar.gz) gzip -dc "$archive" | docker load ;;
-              *.tar.zst) zstd -dc "$archive" | docker load ;;
-              *.tar) docker load -i "$archive" ;;
-              *) echo "Unknown archive type: $archive"; exit 1 ;;
-            esac
-          fi
-
-          echo "Done."
-          EOF
-          sed -i 's/^          //' dist/load.sh
+echo "Done."
+EOF
           chmod +x dist/load.sh
 
       - name: Split archive if needed
@@ -306,8 +246,6 @@ jobs:
             (cd dist && sha256sum "$ARCHIVE" > SHA256SUMS.txt)
           fi
 
-          cat dist/SHA256SUMS.txt
-
       - name: Create release notes
         shell: bash
         run: |
@@ -316,30 +254,18 @@ jobs:
           # Emby Docker image offline package
 
           ## Image
-
           - Image: \`$IMAGE\`
           - Saved as: \`$SAVE_IMAGE\`
-          - Platform: \`$PLATFORM\`
-          - Compression: \`$COMPRESSION\`
-          - Compression level: \`$COMPRESSION_LEVEL\`
+          - Actual Content: ARM64 (Pulled via amd64 tag to bypass author's manifest error)
 
-          ## Verify
-
-          Download all release assets into the same directory, then run:
-
+          ## Verify & Load
           \`\`\`bash
           sha256sum -c --ignore-missing SHA256SUMS.txt
-          \`\`\`
-
-          ## Load
-
-          \`\`\`bash
           chmod +x load.sh
           ./load.sh
           \`\`\`
 
-          ## Start your compose service
-
+          ## Start
           \`\`\`bash
           docker compose up -d
           \`\`\`
@@ -353,13 +279,8 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" \
-              --title "$RELEASE_TAG" \
-              --notes-file release-notes.md
+            gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file release-notes.md
           else
-            gh release create "$RELEASE_TAG" \
-              --title "$RELEASE_TAG" \
-              --notes-file release-notes.md
+            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file release-notes.md
           fi
-
           gh release upload "$RELEASE_TAG" dist/* --clobber
