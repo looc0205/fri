@@ -245,47 +245,48 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           cat > dist/load.sh <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
+          #!/usr/bin/env bash
+          set -euo pipefail
 
-echo "Checking SHA256 sums..."
-if [ -f SHA256SUMS.txt ]; then
-  sha256sum -c --ignore-missing SHA256SUMS.txt
-else
-  echo "SHA256SUMS.txt not found, skipping checksum verification."
-fi
+          echo "Checking SHA256 sums..."
+          if [ -f SHA256SUMS.txt ]; then
+            sha256sum -c --ignore-missing SHA256SUMS.txt
+          else
+            echo "SHA256SUMS.txt not found, skipping checksum verification."
+          fi
 
-if ls *.part-* >/dev/null 2>&1; then
-  first_part="$(ls *.part-* | head -n 1)"
-  base="${first_part%%.part-*}"
+          if ls *.part-* >/dev/null 2>&1; then
+            first_part="$(ls *.part-* | head -n 1)"
+            base="${first_part%%.part-*}"
 
-  echo "Loading split archive: ${base}.part-*"
+            echo "Loading split archive: ${base}.part-*"
 
-  case "$base" in
-    *.tar.gz) cat "${base}".part-* | gzip -dc | docker load ;;
-    *.tar.zst) cat "${base}".part-* | zstd -dc | docker load ;;
-    *.tar) cat "${base}".part-* | docker load ;;
-    *) echo "Unknown split archive type: $base"; exit 1 ;;
-  esac
-else
-  archive="$(find . -maxdepth 1 -type f \( -name '*.tar' -o -name '*.tar.gz' -o -name '*.tar.zst' \) | sort | head -n 1)"
+            case "$base" in
+              *.tar.gz) cat "${base}".part-* | gzip -dc | docker load ;;
+              *.tar.zst) cat "${base}".part-* | zstd -dc | docker load ;;
+              *.tar) cat "${base}".part-* | docker load ;;
+              *) echo "Unknown split archive type: $base"; exit 1 ;;
+            esac
+          else
+            archive="$(find . -maxdepth 1 -type f \( -name '*.tar' -o -name '*.tar.gz' -o -name '*.tar.zst' \) | sort | head -n 1)"
 
-  if [ -z "$archive" ]; then
-    echo "No Docker archive found."
-    exit 1
-  fi
+            if [ -z "$archive" ]; then
+              echo "No Docker archive found."
+              exit 1
+            fi
 
-  echo "Loading archive: $archive"
-  case "$archive" in
-    *.tar.gz) gzip -dc "$archive" | docker load ;;
-    *.tar.zst) zstd -dc "$archive" | docker load ;;
-    *.tar) docker load -i "$archive" ;;
-    *) echo "Unknown archive type: $archive"; exit 1 ;;
-  esac
-fi
+            echo "Loading archive: $archive"
+            case "$archive" in
+              *.tar.gz) gzip -dc "$archive" | docker load ;;
+              *.tar.zst) zstd -dc "$archive" | docker load ;;
+              *.tar) docker load -i "$archive" ;;
+              *) echo "Unknown archive type: $archive"; exit 1 ;;
+            esac
+          fi
 
-echo "Done."
-EOF
+          echo "Done."
+          EOF
+          sed -i 's/^          //' dist/load.sh
           chmod +x dist/load.sh
 
       - name: Split archive if needed
