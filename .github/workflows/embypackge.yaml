@@ -10,7 +10,7 @@ on:
         default: "amilys/embyserver_arm64v8"
 
       platform:
-        description: "目标平台 (针对该镜像请选 linux/amd64 以绕过标签错误)"
+        description: "目标平台 (由于作者标签错误，打包ARM版请选 linux/amd64)"
         required: true
         type: choice
         options:
@@ -19,7 +19,7 @@ on:
         default: linux/amd64
 
       release_tag:
-        description: "GitHub Release tag. Leave empty to auto-generate."
+        description: "GitHub Release tag."
         required: false
         type: string
         default: "emby-arm64-offline"
@@ -128,7 +128,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pigz zstd
 
-      # 直接拉取，不检查本地架构，因为作者标签写错了但内容是 arm64
       - name: Pull image
         shell: bash
         run: |
