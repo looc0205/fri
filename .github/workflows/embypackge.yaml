@@ -188,44 +188,41 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cat > dist/load.sh <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-echo "Checking SHA256 sums..."
-if [ -f SHA256SUMS.txt ]; then
-  sha256sum -c --ignore-missing SHA256SUMS.txt
-else
-  echo "SHA256SUMS.txt not found, skipping checksum verification."
-fi
-
-if ls *.part-* >/dev/null 2>&1; then
-  first_part="$(ls *.part-* | head -n 1)"
-  base="${first_part%%.part-*}"
-  echo "Loading split archive: ${base}.part-*"
-  case "$base" in
-    *.tar.gz) cat "${base}".part-* | gzip -dc | docker load ;;
-    *.tar.zst) cat "${base}".part-* | zstd -dc | docker load ;;
-    *.tar) cat "${base}".part-* | docker load ;;
-    *) echo "Unknown split archive type: $base"; exit 1 ;;
-  esac
-else
-  archive="$(find . -maxdepth 1 -type f \( -name '*.tar' -o -name '*.tar.gz' -o -name '*.tar.zst' \) | sort | head -n 1)"
-  if [ -z "$archive" ]; then
-    echo "No Docker archive found."
-    exit 1
-  fi
-  echo "Loading archive: $archive"
-  case "$archive" in
-    *.tar.gz) gzip -dc "$archive" | docker load ;;
-    *.tar.zst) zstd -dc "$archive" | docker load ;;
-    *.tar) docker load -i "$archive" ;;
-    *) echo "Unknown archive type: $archive"; exit 1 ;;
-  esac
-fi
-
-echo "Done."
-EOF
+          {
+            echo '#!/usr/bin/env bash'
+            echo 'set -euo pipefail'
+            echo 'echo "Checking SHA256 sums..."'
+            echo 'if [ -f SHA256SUMS.txt ]; then'
+            echo '  sha256sum -c --ignore-missing SHA256SUMS.txt'
+            echo 'else'
+            echo '  echo "SHA256SUMS.txt not found, skipping checksum verification."'
+            echo 'fi'
+            echo 'if ls *.part-* >/dev/null 2>&1; then'
+            echo '  first_part="$(ls *.part-* | head -n 1)"'
+            echo '  base="${first_part%%.part-*}"'
+            echo '  echo "Loading split archive: ${base}.part-*"'
+            echo '  case "$base" in'
+            echo '    *.tar.gz) cat "${base}".part-* | gzip -dc | docker load ;;'
+            echo '    *.tar.zst) cat "${base}".part-* | zstd -dc | docker load ;;'
+            echo '    *.tar) cat "${base}".part-* | docker load ;;'
+            echo '    *) echo "Unknown split archive type: $base"; exit 1 ;;'
+            echo '  esac'
+            echo 'else'
+            echo '  archive="$(find . -maxdepth 1 -type f \( -name "*.tar" -o -name "*.tar.gz" -o -name "*.tar.zst" \) | sort | head -n 1)"'
+            echo '  if [ -z "$archive" ]; then'
+            echo '    echo "No Docker archive found."'
+            echo '    exit 1'
+            echo '  fi'
+            echo '  echo "Loading archive: $archive"'
+            echo '  case "$archive" in'
+            echo '    *.tar.gz) gzip -dc "$archive" | docker load ;;'
+            echo '    *.tar.zst) zstd -dc "$archive" | docker load ;;'
+            echo '    *.tar) docker load -i "$archive" ;;'
+            echo '    *) echo "Unknown archive type: $archive"; exit 1 ;;'
+            echo '  esac'
+            echo 'fi'
+            echo 'echo "Done."'
+          } > dist/load.sh
           chmod +x dist/load.sh
 
       - name: Split archive if needed
@@ -249,26 +246,26 @@ EOF
         shell: bash
         run: |
           set -euo pipefail
-          cat > release-notes.md <<EOF
-          # Emby Docker image offline package
-
-          ## Image
-          - Image: \`$IMAGE\`
-          - Saved as: \`$SAVE_IMAGE\`
-          - Actual Content: ARM64 (Pulled via amd64 tag to bypass author's manifest error)
-
-          ## Verify & Load
-          \`\`\`bash
-          sha256sum -c --ignore-missing SHA256SUMS.txt
-          chmod +x load.sh
-          ./load.sh
-          \`\`\`
-
-          ## Start
-          \`\`\`bash
-          docker compose up -d
-          \`\`\`
-          EOF
+          {
+            echo '# Emby Docker image offline package'
+            echo ''
+            echo '## Image'
+            echo "- Image: \`$IMAGE\`"
+            echo "- Saved as: \`$SAVE_IMAGE\`"
+            echo "- Actual Content: ARM64 (Pulled via amd64 tag to bypass author manifest error)"
+            echo ''
+            echo '## Verify & Load'
+            echo '\`\`\`bash'
+            echo 'sha256sum -c --ignore-missing SHA256SUMS.txt'
+            echo 'chmod +x load.sh'
+            echo './load.sh'
+            echo '\`\`\`'
+            echo ''
+            echo '## Start'
+            echo '\`\`\`bash'
+            echo 'docker compose up -d'
+            echo '\`\`\`'
+          } > release-notes.md
 
       - name: Create or update GitHub Release
         env:
